@@ -26,39 +26,72 @@ io.on("connection", (socket) => {
   socket.on("ice", (data) => socket.broadcast.emit("ice", data));
 });
 
-// ---------- WebSocket para audio (ESP32 <-> navegador) ----------
+// ---------- WebSocket para audio hacia el ESP32 (bajada) ----------
 const wss = new WebSocket.Server({ server });
 
-let espSocket = null;
+// 1) Navegador → ESP32 (tu voz hacia el robot)
+let espAudioSocket = null;
+
+// 2) ESP32 → Navegador (micrófono del robot)
+let espMicSocket = null;
+const browserMicClients = new Set();
 
 wss.on("connection", (socket, req) => {
   const path = req.url || "/";
   console.log("Nueva conexión WS en", path);
 
-  // Conexión desde el ESP32
+  // ==== AUDIO: servidor → ESP32 (bajada), navegador → ESP32 ====
   if (path.startsWith("/esp-audio")) {
-    console.log("ESP32 conectado para audio");
-    espSocket = socket;
+    console.log("ESP32 conectado para audio (bajada)");
+    espAudioSocket = socket;
 
     socket.on("close", () => {
-      console.log("ESP32 desconectado");
-      if (espSocket === socket) espSocket = null;
+      console.log("ESP32 desconectado de audio (bajada)");
+      if (espAudioSocket === socket) espAudioSocket = null;
     });
   }
 
-  // Conexión desde el navegador (HTML)
   else if (path.startsWith("/browser-audio")) {
-    console.log("Navegador conectado para audio");
+    console.log("Navegador conectado para enviar audio al ESP32");
 
     socket.on("message", (data) => {
-      // data = bytes de audio (Uint8Array)
-      if (espSocket && espSocket.readyState === WebSocket.OPEN) {
-        espSocket.send(data); // reenviamos tal cual al ESP32
+      if (espAudioSocket && espAudioSocket.readyState === WebSocket.OPEN) {
+        espAudioSocket.send(data); // reenviamos audio al ESP32
       }
     });
 
     socket.on("close", () => {
-      console.log("Navegador desconectado de audio");
+      console.log("Navegador desconectado de audio → ESP32");
+    });
+  }
+
+  // ==== MIC: ESP32 → servidor → navegadores (subida) ====
+  else if (path.startsWith("/esp-mic")) {
+    console.log("ESP32 conectado para micrófono (subida)");
+    espMicSocket = socket;
+
+    socket.on("message", (data) => {
+      // reenviar a todos los navegadores que escuchan
+      for (const client of browserMicClients) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(data);
+        }
+      }
+    });
+
+    socket.on("close", () => {
+      console.log("ESP32 desconectado de micrófono");
+      if (espMicSocket === socket) espMicSocket = null;
+    });
+  }
+
+  else if (path.startsWith("/browser-mic")) {
+    console.log("Navegador conectado para escuchar micrófono del robot");
+    browserMicClients.add(socket);
+
+    socket.on("close", () => {
+      console.log("Navegador dejó de escuchar micrófono");
+      browserMicClients.delete(socket);
     });
   }
 
